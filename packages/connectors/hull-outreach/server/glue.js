@@ -9,11 +9,16 @@ const {
   set,
   get,
   filter,
+  pick,
   utils,
   input,
   inputParameter,
+  webroute,
   Svc
 } = require("./shared/language")
+
+const ACCOUNT_FIELDDEFS = require("./account-fielddefs");
+const PROSPECT_FIELDDEFS = require("./prospect-fielddefs");
 
 // function outreach(op: string, query: any): Svc { return new Svc("outreach", op, query, null)};
 // function outreach(op: string, data: any): Svc { return new Svc("outreach", op, null, data)};
@@ -57,8 +62,31 @@ const refreshTokenDataTemplate = {
 // everything else doesn't have a name....
 
 const glue = {
-  userUpdateStart: route("prospectLookupById"),
-  prospectLookupById:
+  "batch/user:update": webroute("batchHandler", route("updateUserStart")),
+  "batch/account:update": webroute("batchHandler", route("accountUpdateStart")),
+  "smart-notifier/user:update": webroute("notificationHandler", route("updateUserStart")),
+  "smart-notifier/account:update": webroute("notificationHandler", route("accountUpdateStart")),
+  "fetch": webroute("jsonHandler", route("fetchAll")),
+  "fields-outreach-prospect-in": webroute("jsonHandler", pick(filter(ACCOUNT_FIELDDEFS, { in: true }), ["value", "label"])),
+  "fields-outreach-prospect-out": webroute("jsonHandler", pick(filter(PROSPECT_FIELDDEFS, { out: true }), ["value", "label"])),
+  "fields-outreach-account-in": webroute("jsonHandler", pick(filter(ACCOUNT_FIELDDEFS, { in: true }), ["value", "label"])),
+  "fields-outreach-account-out": webroute("jsonHandler", pick(filter(PROSPECT_FIELDDEFS, { out: true }), ["value", "label"])),
+  "status": webroute("scheduleHandler",
+      [
+        ifLogic(cond("isEmpty", "${connector.private_settings.access_token}"), {
+          true: { status: "error", message: "Write Key Not Found"}, false: {}
+        }),
+        ifLogic(cond("existsIsEmpty", "${connector.private_settings.synchronzed_user_segments}"), {
+          true: { status: "warning", message: "No synchronized user segments inputted, not sending any users"}, false: {}
+        }),
+        ifLogic(cond("existsIsEmpty", "${connector.private_settings.synchronzed_account_segments}"), {
+          true: { status: "warning", message: "No synchronized user segments inputted, not sending any users"}, false: {}
+        }),
+        ifLogic(cond("existsIsEmpty", "${connector.private_settings.synchronzed_event_segments}"), {
+          true: { status: "warning", message: "No synchronized user segments inputted, not sending any users"}, false: {}
+        })
+      ]),
+  updateUserStart:
     ifLogic(cond("notEmpty", set("userId", inputParameter("outreach/id"))), {
       true: ifLogic(cond("notEmpty", outreach("getProspectById")), {
               true: hull("asUser", outreachSendInput("updateProspect")),

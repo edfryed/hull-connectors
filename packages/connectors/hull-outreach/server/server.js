@@ -35,13 +35,16 @@ const { transformsToService } = require("./transforms-to-service");
 const { hullService } = require("./shared/hull-service");
 const { transformsToHull } = require("./transforms-to-hull");
 
+const manifest = require("../manifest.json");
 
+function validateManifest(): boolean {
+
+}
 
 function server(app: $Application, deps: Object): $Application {
 
   const engine: HullConnectorEngine = new HullConnectorEngine(
-    glue,
-    {hull: hullService, outreach: service},
+    glue, {hull: hullService, outreach: service},
     _.concat(transformsToHull, transformsToService),
     "ensureWebhooks");
 
@@ -61,18 +64,10 @@ function server(app: $Application, deps: Object): $Application {
   };
 
   app.post("/smart-notifier", notificationHandler(notifications));
-  app.post("/batch", batchHandler(notifications));
-
-  const authCallback = engine.getAuthCallback();
-  if (authCallback !== null) {
-    app.use("/auth", authCallback);
-  }
-
   app.post("/status", scheduleHandler(engine.getStatusCallback()));
 
-  const fetchAllAction = engine.getFetchAllAction();
-  if (fetchAllAction !== null)
-    app.post("/fetch", jsonHandler(fetchAllAction));
+
+  app.post("/batch", batchHandler(notifications));
 
   const webhookCallback = engine.getWebhookCallback();
   if (webhookCallback !== null) {
@@ -88,6 +83,15 @@ function server(app: $Application, deps: Object): $Application {
     );
   }
 
+
+  const authCallback = engine.getAuthCallback();
+  if (authCallback !== null) {
+    app.use("/auth", authCallback);
+  }
+
+  const fetchAllAction = engine.getFetchAllAction();
+  if (fetchAllAction !== null)
+    app.post("/fetch", jsonHandler(fetchAllAction));
 
   app.get("/admin", htmlHandler(actions.adminHandler));
   app.get(

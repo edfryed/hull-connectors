@@ -28,14 +28,18 @@ const { SuperagentApi } = require("./superagent-api");
 const { HullSdk } = require("./hull-service");
 const { TransformImpl } = require("./transform-impl");
 
+const { NavigationNode } = require("./navigation-node");
+
 import type { HullRequest } from "hull";
 
 const debug = require("debug")("hull-shared:engine");
 
 class IncomingData {
+  localContext: Object;
   classType: any;
   obj: any
   constructor(classType: any, obj: any) {
+    this.localContext = {};
     this.classType = classType;
     this.obj = obj;
   }
@@ -48,7 +52,11 @@ class HullConnectorEngine {
   transforms: TransformImpl;
   glue: Object;
   ensure: string;
-  retryMutex: boolean;
+
+  activeServices: Object;
+
+  //TODO need to have a super agent map per customer...
+  //retryMutex: boolean;
 
   // TODO input transforms and services....
   // TODO could have multiple services in the future... maybe take in an array?
@@ -58,7 +66,6 @@ class HullConnectorEngine {
     this.services = services;
     this.transforms = new TransformImpl(transforms);
     this.ensure = ensure;
-    this.retryMutex = false;
   }
 
   async dispatch(context: Object, instruction: Object) {
@@ -68,84 +75,45 @@ class HullConnectorEngine {
   async dispatchWithData(context: Object, instruction: Object, data: null | IncomingData) {
     try {
       if (!_.isEmpty(this.ensure)) {
-        await this.resolve(0, context, new Route(this.ensure), data);
+        await this.resolve(new NavigationNode(context, null, new Route(this.ensure), data));
       }
-      return await this.resolve(0, context, instruction, data);
+      this.resolve(new NavigationNode(context, null, instruction, data));
     } catch (error) {
       console.log("Error here: " + error.stack);
     }
   }
 
-  async resolve(depth: number, context: Object, instruction: Object, data: null | IncomingData): any {
+  async resolve(node: NavigationNode): any {
 
-    if (instruction === undefined || instruction === null) {
-      return instruction;
-    }
 
-    // need to handle array expansion or consolidation in the same place...
-    // is array of instruction different than array of object returns?
-    // maybe not....
+    const instruction = node.instruction;
 
-    // array of instructions, those results together don't make much sense...
-    // could be consolidating a variety of results from a variety of instructions
-    // many of which don't have outputs...
     if (Array.isArray(instruction)) {
+      // TODO this one is still problematic... I think we always want to wait
+      // and execute arrays in order....
+      // but true/false logic i think it's ok to go parralel
       const results = [];
-
       for (let index = 0; index < instruction.length; index++) {
-        const result = await this.resolve(depth, context, instruction[index], data);
-        results.push(result);
+        const param = await this.resolve(new NavigationNode(node.context, node, instruction[index], node.data));
+        results.push(param);
       }
+      return Promise.resolve(results);
 
-      return results;
     } else if (instruction instanceof HullInstruction) {
-
-      // an instruction could take in an array
-      // but if it's single, then make array if endpoint takes an array
-      // if it's an array, and endpoint takes 1, then loop over...
-
-      // What are the differnces between input and parameters....
-      // parameters are more downstream instructions that the input gets passed to first
-      // this instruction only gets the result of the downstream objects...
-      // are the hull input objects, the parameters to the route????!!!!
-      // is that why route is the only object without parameters????!!!
-
-      // what is the relationship between the route and the glue? What is the abstraction???
-
-      const params = instruction.params;
-      let resolvedParams = await this.resolve(depth, context, params, data);
-
-      if (!isUndefinedOrNull(resolvedParams)) {
-
-        let paramName = null;
-        if (params instanceof HullInstruction) {
-          paramName = `${params.type}:${params.name}`;
-        } else  if (typeof params === 'string') {
-          paramName = params;
-        }
-
-        let paramString = JSON.stringify(resolvedParams);
-        if (paramString.length > 30) {
-          paramString = `${paramString.substring(0,60)}...`;
-        }
-
-        if (paramName === null) {
-          debug(`[EXECUTING]: ${instruction.type}<${instruction.name}> [RESOLVED-TO]: ${paramString}`);
-        } else {
-          debug(`[EXECUTING]: ${instruction.type}<${instruction.name}> [FROM]: ${paramName} [RESOLVED-TO]: ${paramString}`);
-        }
-
-      } else {
-        debug(`[EXECUTING]: ${instruction.type}<${instruction.name}>`);
-      }
-
-      return await this.interpretInstruction(depth, context, instruction, resolvedParams, data);
+      return this.resolve(new NavigationNode(node.context, node, instruction.param, node.data))
+      .then((results) => {
+          return this.doInstruction(node, results);
+        });
     } else {
-      return doVariableReplacement(context, instruction);
+      // at some point the param will string, or null
+      return Promise.resolve(doVariableReplacement(node.context, instruction));
     }
+
   }
 
-  async interpretInstruction(depth: number, context: Object, instruction: Object, resolvedParams: any, data: null | IncomingData) {
+  async doInstruction(node: NavigationNode, resolvedParams: any) {
+    const instruction= node.instruction;
+    const data = node.data;
     let type = _.get(instruction, "type");
 
     if (type === 'reference') {
@@ -166,7 +134,7 @@ class HullConnectorEngine {
       if (_.isEmpty(route)) {
         throw new Error(`Route: ${instruction.name} not found in glue`);
       }
-      return await this.resolve(depth, context, route, data);
+      return await this.resolve(new NavigationNode(node.context, node, route, data));
     } else if (type === 'logic') {
 
       const name = instruction.name;
@@ -174,9 +142,9 @@ class HullConnectorEngine {
       if (name === 'if') {
 
         if (resolvedParams) {
-          return await this.resolve(depth, context, instruction.results.true, data);
+          return await this.resolve(new NavigationNode(node.context, node, instruction.results.true, data));
         } else {
-          return await this.resolve(depth, context, instruction.results.false, data);
+          return await this.resolve(new NavigationNode(node.context, node, instruction.results.false, data));
         }
 
       } else {
@@ -192,7 +160,7 @@ class HullConnectorEngine {
         if (resolvedParams.length === 2){
 
           if (name === 'set') {
-            _.set(context, resolvedParams[0], resolvedParams[1]);
+            _.set(node.context, resolvedParams[0], resolvedParams[1]);
             // return the obj that we set...
             return resolvedParams[1];
           } else if (name === 'get') {
@@ -200,13 +168,13 @@ class HullConnectorEngine {
           } else if (name === 'filter') {
             return _.filter(resolvedParams[0], resolvedParams[1]);
           } else if (name === 'utils') {
-            return new FrameworkUtils()[resolvedParams[0]](context, resolvedParams[1]);
+            return new FrameworkUtils()[resolvedParams[0]](node.context, resolvedParams[1]);
           } else {
             throw new Error(`Unsupported Conditional: ${name}`);
           }
         } else if (resolvedParams.length === 1) {
           if (name === 'get') {
-            return _.get(context, resolvedParams[0]);
+            return _.get(node.context, resolvedParams[0]);
           }
         }
       }
@@ -232,7 +200,7 @@ class HullConnectorEngine {
       const results = [];
 
       for (let index = 0; index < inputParams.length; index++) {
-        const result = await this.callService(depth, context, instruction, inputParams[index]);
+        const result = await this.callService(node.context, instruction, inputParams[index]);
         results.push(result);
       }
 
@@ -248,6 +216,33 @@ class HullConnectorEngine {
       throw new Error("Unsupported type: " + type);
     }
 
+  }
+
+  printInstructionAndResolvedParam(instruction: any, resolvedParams: any) {
+    if (!isUndefinedOrNull(resolvedParams)) {
+      const params = instruction.params;
+
+      let paramName = null;
+      if (params instanceof HullInstruction) {
+        paramName = `${params.type}:${params.name}`;
+      } else  if (typeof params === 'string') {
+        paramName = params;
+      }
+
+      let paramString = JSON.stringify(resolvedParams);
+      if (paramString.length > 30) {
+        paramString = `${paramString.substring(0,60)}...`;
+      }
+
+      if (paramName === null) {
+        debug(`[EXECUTING]: ${instruction.type}<${instruction.name}> [RESOLVED-TO]: ${paramString}`);
+      } else {
+        debug(`[EXECUTING]: ${instruction.type}<${instruction.name}> [FROM]: ${paramName} [RESOLVED-TO]: ${paramString}`);
+      }
+
+    } else {
+      debug(`[EXECUTING]: ${instruction.type}<${instruction.name}>`);
+    }
   }
 
   async callService(depth: number, context: Object, instruction: Object, inputParam: any) {
@@ -298,15 +293,16 @@ class HullConnectorEngine {
 
     return retryablePromise().catch(error => {
       debug(`[SERVICE-ERROR]: ${name} [ERROR]: ${JSON.stringify(error)}`);
+
         const route: string = this.onErrorGetRecovery(serviceDefinition, error);
-        if (!this.retryMutex && !_.isEmpty(route)) {
-          this.retryMutex = true;
+        if (!_.isEmpty(route)) {
+          // potentially want to evacuate existing super agent and create a new one...
+          // should pause any other ongoing requests until this finishes?
+          // not just pause, destroy it and requeue...
           debug(`[SERVICE-ERROR]: ${name} [RECOVERY-ROUTE-ATTEMPT]: ${route}`);
-          return this.resolve(depth, context, new Route(route), inputParam).then(() => {
-            this.retryMutex = false;
+          return this.resolve(context, new Route(route), inputParam).then(() => {
             return retryablePromise();
           }).catch(error => {
-            this.retryMutex = false;
             return Promise.reject(error);
           });
       } else {
@@ -395,6 +391,10 @@ class HullConnectorEngine {
           debug(`User does not match segment ${ JSON.stringify(message.user) }`);
           return;
         }
+
+        const changedUserAttributes = _.keys(_.get(message.changes, "user", {}));
+        // TODO have to account for strings as well as input/output keys...
+        const propertiesChanged = _.intersection(context.connector.settings.synchronized_user_properties, changedUserAttributes).length > 0
       }
 
       // if no changes to account attributes
@@ -418,6 +418,10 @@ class HullConnectorEngine {
           debug(`Account does not match segment ${ JSON.stringify(message.account) }`);
           return;
         }
+
+        // TODO have to account for strings as well as input/output keys...
+        const changedAccountAttributes = _.keys(_.get(message.changes, "account", {}));
+        const propertiesChanged = _.intersection(context.connector.settings.synchronized_account_properties, changedAccountAttributes).length > 0
 
         // if no changes to account attributes
         //if ()

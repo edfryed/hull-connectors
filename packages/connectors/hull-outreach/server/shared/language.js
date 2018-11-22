@@ -25,9 +25,9 @@ class Route extends HullInstruction {
 // but could be an array on the incoming... think filter...
 class Op extends HullInstruction {
 
-  params: any;
+  params: Object;
 
-  constructor(name: string, params: any) {
+  constructor(name: string, params: Object) {
     super("operation", name);
     this.params = params;
   }
@@ -93,21 +93,29 @@ function cond(name: string, params: any): Op {
 function hull(op: string, params: string | Object): Svc{
   return new Svc("hull", op, params);
 }
-function set(key: any, value: any): Op{
-  return new Op("set", [ key, value ]);
+function set(op: { key: any, value: any }): Op{
+  return new Op("set", op);
 }
-function get(obj: any, key: any): Op {
-  return new Op("get", [ obj, key ]);
+function get(op: { obj: any, value: any }): Op {
+  return new Op("get", op);
 }
-function filter(key: any, value: any): Op {
-  return new Op("filter", [ key, value ]);
+function filter(op: { key: any, value: any }): Op {
+  return new Op("filter", op);
 }
-function utils(utilMethod: string, param: any): Op {
-  return new Op("utils", [utilMethod, param]);
+function utils(op: { method: string, param: any }): Op {
+  return new Op("utils", op);
 }
 
 function ifLogic(params: Op, results: { true: any, false: any }): IfLogic {
   return new IfLogic(params, results);
+}
+
+// TODO not done....
+function pick(op: { key: any, value: any }): Op {
+  return new Op("pick", op);
+}
+function webroute(op: { handlerName: any, params: any }): Op {
+  return new Op("webroute", op);
 }
 
 module.exports = {
@@ -123,5 +131,7 @@ module.exports = {
   set,
   get,
   filter,
-  utils
+  utils,
+  pick,
+  webroute
 };
