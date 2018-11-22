@@ -14,17 +14,17 @@ const service: RawRestApi = {
   initialize: (context, api) => new SuperagentApi(context, api),
   prefix: "https://api.outreach.io/api/v2",
   endpoints: {
-    ensureHullGroup: {
-      url: "/contacts/v2/groups",
-      operation: "post",
-      endpointType: "upsert",
+    getAccountById: {
+      url: "/accounts/${accountId}",
+      operation: "get",
+      endpointType: "byId",
+      returnObj: "body.data",
       output: OutreachAccountRead
     },
-    getContactPropertyGroups: {
-      url: "/contacts/v2/groups",
+    getAccountByDomain: {
+      url: "/accounts/${accountDomain}",
       operation: "get",
-      query: { includeProperties: true },
-      endpointType: "byProperty",
+      endpointType: "byId",
       returnObj: "body.data",
       output: OutreachAccountRead
     },

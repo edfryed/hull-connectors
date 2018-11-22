@@ -12,15 +12,19 @@ const {
   utils,
   input,
   inputParameter,
+  cache,
   Svc
 } = require("./shared/language")
+
+const COMPANY_DEFAULT_MAPPING = require("./company-default-mapping");
 
 // function outreach(op: string, query: any): Svc { return new Svc("outreach", op, query, null)};
 // function outreach(op: string, data: any): Svc { return new Svc("outreach", op, null, data)};
 
-function outreach(op: string): Svc { return new Svc("outreach", op)};
-function outreachSend(op: string, param: any): Svc { return new Svc("outreach", op, param)};
-function outreachSendInput(op: string): Svc { return new Svc("outreach", op, input())};
+
+function hubspot(op: string): Svc { return new Svc("outreach", op)};
+function hubspotSend(op: string, param: any): Svc { return new Svc("outreach", op, param)};
+function hubspotSendInput(op: string): Svc { return new Svc("outreach", op, input())};
 
 
 // TODO need support for parallel paths too
@@ -57,81 +61,114 @@ const refreshTokenDataTemplate = {
 // everything else doesn't have a name....
 
 const glue = {
-  userUpdateStart: route("prospectLookupById"),
-  prospectLookupById:
-    ifLogic(cond("notEmpty", set("userId", inputParameter("outreach/id"))), {
-      true: ifLogic(cond("notEmpty", outreach("getProspectById")), {
-              true: hull("asUser", outreachSendInput("updateProspect")),
-              false: route("prospectLookupByEmail")
-            }),
-      false: route("prospectLookupByEmail")
-    }),
-  prospectLookupByEmail:
-    ifLogic(cond("notEmpty", set("userEmail", inputParameter("email"))), {
-      true: ifLogic(cond("notEmpty", set("userId", get(outreach("getProspectByEmail"), "id"))), {
-              true: hull("asUser", outreachSendInput("updateProspect")),
-              false: hull("asUser", outreachSendInput("insertProspect"))
-            }),
-      false: hull("asUser", outreachSendInput("insertProspect"))
-    }),
-  accountUpdateStart:
-    ifLogic(cond("notEmpty", set("accountId", inputParameter("outreach/id"))), {
-      true:
-        ifLogic(cond("notEmpty", outreach("getAccountById")), {
-          true: hull("asAccount", outreachSendInput("updateAccount")),
-          false: route("accountLookupByDomain")
-          }),
-      false: route("accountLookupByDomain")
-    }),
-  accountLookupByDomain:
-    ifLogic(cond("notEmpty", set("accountDomain", inputParameter("domain"))), {
-      true: ifLogic(cond("notEmpty", outreach("getAccountByDomain")), {
-              true: hull("asAccount", outreachSendInput("updateAccount")),
-              false: hull("asAccount", outreachSendInput("insertAccount"))
-            }),
-      false: hull("asAccount", outreachSendInput("insertAccount"))
-    }),
-  fetchAll: [route("accountFetchAll"), route("prospectFetchAll")],
-  accountFetchAll: hull("asAccount", outreach("getAllAccounts")),
-  prospectFetchAll: hull("asUser", outreach("getAllProspects")),
-
-  ensureWebhooks:
-    ifLogic(cond("isEmpty", "${connector.private_settings.webhook_id}"), {
-      true: [
-        set("webhookUrl", utils("createWebhookUrl")),
-        ifLogic(cond("isEmpty", filter(outreach("getAllWebhooks"), { type: "webhook", attributes: { url: "${webhookUrl}" } })),
-          {
-            true: [
-              set("webhookId", get(outreachSend("insertWebhook", webhookDataTemplate), "data.id")),
-              hull("settingsUpdate", { webhook_id:  "${webhookId}" })
-            ],
-            false: {}
-          })
-        ],
+  syncContactProperties: [route("ensureHullGroup"), route("ensureCustomProperties")],
+  ensureHullGroup:
+    ifLogic(cond("isEmpty", filter(cache("hubspotContactProperties", hubspot("getContactPropertyGroups")), {name: "hull"})), {
+      true: hubspot("ensureHullGroup"),
       false: {}
     }),
-  refreshToken:
-    ifLogic(cond("notEmpty", "${connector.private_settings.refresh_token}"), {
-      true: [
-        set("connectorHostname", utils("getConnectorHostname")),
-        ifLogic(cond("notEmpty", set("refreshTokenResponse", outreachSend("refreshToken", refreshTokenDataTemplate))), {
-          true: [
-            set("connector.private_settings.expires_in", "${refreshTokenResponse.expires_in}"),
-            set("connector.private_settings.created_at", "${refreshTokenResponse.created_at}"),
-            set("connector.private_settings.refresh_token", "${refreshTokenResponse.refresh_token}"),
-            set("connector.private_settings.access_token", "${refreshTokenResponse.access_token}"),
-            hull("settingsUpdate", {
-                          "expires_in": "${refreshTokenResponse.expires_in}",
-                          "created_at": "${refreshTokenResponse.created_at}",
-                          "refresh_token": "${refreshTokenResponse.refresh_token}",
-                          "access_token": "${refreshTokenResponse.access_token}"})
-          ],
-          false: {}
+  ensureCustomProperties:
+    [
+      set("expectedPropertiesList", concat("${userSegments}", route("getContactOutgoingMapping"))),
+      set("flattenedProperties", concat()),
+      expand(set("expectedProperty", "${expectedPropertiesList}"),
+        ifLogic(cond("isEmpty", set("existingValue", get("${flattenedProperties}", get("name")))), {
+          true:
+            ifLogic(cond("isEmpty", set("existingProperty", get("${flattenedProperties}", replace(get("name"), "/^hull_/, ")))), {
+              true: route("insertNewProperty"),
+              false: route("checkIfNeedsUpdate")
+            }),
+          false: route("checkIfNeedsUpdate")
         })
-      ],
+      )
+    ],
+
+  ensureCustomProperties:
+    ifLogic(cond("notEqual", map("${expectedProperty}", "options.label"), map("${existingProperty}", "options.label")), {
+      true: hubspot("updateProperty", "${expectedProperty}"),
       false: {}
-  })
+    }),
+  getContactOutgoingMapping: {
+    cache("hubspotContactProperties", hubspot("getContactPropertyGroups")
+  }
 
 };
+
+
+
+
+const flattenProperties = _.flatten(
+  hubspotGroupProperties.map(g => g.properties)
+).reduce((props, prop) => {
+  return Object.assign(props, { [prop.name]: prop });
+}, {});
+
+
+
+    {
+        "name": "companyinformation",
+        "displayName": "Company Information",
+        "displayOrder": 1,
+        "hubspotDefined": true,
+        "properties": [
+            {
+                "name": "about_us",
+                "label": "About Us",
+                "description": "Short about-company",
+                "groupName": "companyinformation",
+                "type": "string",
+                "fieldType": "text",
+                "hidden": false,
+                "options": [],
+                "createdUserId": null,
+                "deleted": null,
+                "favorited": false,
+                "favoritedOrder": -1,
+                "updatedUserId": null,
+                "searchableInGlobalSearch": false,
+                "hasUniqueValue": false,
+                "formField": false,
+                "mutableDefinitionNotDeletable": true,
+                "externalOptions": false,
+                "displayMode": "current_value",
+                "numberDisplayHint": null,
+                "textDisplayHint": null,
+                "optionsAreMutable": null,
+                "referencedObjectType": null,
+                "isCustomizedDefault": false,
+                "createdAt": null,
+                "updatedAt": null,
+                "displayOrder": -1,
+                "readOnlyValue": false,
+                "readOnlyDefinition": true,
+                "calculated": false,
+                "showCurrencySymbol": null,
+                "currencyPropertyName": null,
+                "hubspotDefined": true
+            },
+            {
+                "name": "first_deal_created_date",
+                "label": "First Deal Created Date",
+                "description": "The date the first deal for this contact was created",
+                "groupName": "companyinformation",
+                "type": "datetime",
+                "fieldType": "text",
+                "hidden": false,
+                "options": [],
+                "createdUserId": null,
+                "deleted": null,
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 module.exports = { glue };
