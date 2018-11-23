@@ -18,6 +18,7 @@ const service: RawRestApi = {
       url: "/contacts/v2/groups",
       operation: "post",
       endpointType: "upsert",
+      maxObj: 100,
       output: OutreachAccountRead
     },
     getContactPropertyGroups: {

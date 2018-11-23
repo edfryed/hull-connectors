@@ -43,6 +43,34 @@ const transformsToService: ServiceTransforms = [
         outputPath: "data.attributes.${output_field_name}",
       }
     ]
+  },
+  {
+    input: HullProperties,
+    output: HubspotProperties,
+    transforms: [
+      { inputPath: "properties", outputPath: "${name}", outputFormat: "account" }
+    ]
+  }
+
+  const option =  {
+    hidden: false,
+    description: null,
+    value: "${userSegments.name}",
+    readOnly: false,
+    doubleData: 0.0,
+    label: "${userSegments.name}",
+    displayOrder: i
+  };
+  const hullHubspotSegments = {
+  options: "${options}",
+  description: "All the Segments the User belongs to in Hull",
+  label: "Hull Segments",
+  groupName: "hull",
+  fieldType: "checkbox",
+  formField: false,
+  name: "hull_segments",
+  type: "enumeration",
+  displayOrder: 0
   }
 ];
 

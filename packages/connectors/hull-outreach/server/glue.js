@@ -55,10 +55,7 @@ const refreshTokenDataTemplate = {
 // everything else can be nested, which means, the if/else
 // flow is special somehow....
 
-// glue is a list of routes....
-// a route has a name, and a parameter to be evaluated....
-// a route is a named instruction....
-// everything else doesn't have a name....
+
 
 const glue = {
   syncContactProperties: [route("ensureHullGroup"), route("ensureCustomProperties")],
@@ -69,8 +66,9 @@ const glue = {
     }),
   ensureCustomProperties:
     [
-      set("expectedPropertiesList", concat("${userSegments}", route("getContactOutgoingMapping"))),
-      set("flattenedProperties", concat()),
+      macro("somemacro", transform("transformToHubspot", "${userSegments}"),
+        transform("transformToHubspot", "${contactproperties}"))
+
       expand(set("expectedProperty", "${expectedPropertiesList}"),
         ifLogic(cond("isEmpty", set("existingValue", get("${flattenedProperties}", get("name")))), {
           true:
@@ -80,7 +78,6 @@ const glue = {
             }),
           false: route("checkIfNeedsUpdate")
         })
-      )
     ],
 
   ensureCustomProperties:
